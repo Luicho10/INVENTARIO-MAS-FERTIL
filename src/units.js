@@ -81,11 +81,10 @@ function cleanModalUnits(modal) {
   const selects = [...modal.querySelectorAll('select')];
   selects.forEach(s => {
     [...s.options].forEach(o => {
-      if (/litros|unidades/i.test(o.textContent)) o.remove();
+      // La ventana Nueva materia prima ya posee sus opciones; no las eliminamos.
       if (/^ton$/i.test(o.textContent.trim())) { o.value = 'Tn'; o.textContent = 'Tn'; }
     });
   });
-
   const newMpUnit = selects.find(s => /^kg$|^tn$|^ton$/i.test(s.options[0]?.textContent?.trim() || '') && s.closest('label')?.textContent?.trim().startsWith('Unidad'));
   if (newMpUnit) selectStyle(newMpUnit);
 }
@@ -131,8 +130,6 @@ function updateAdjustmentLabels(modal, unit) {
 }
 
 function improve() {
-  // Importante: no modificar el DOM continuamente desde un MutationObserver.
-  // Solo actuamos cuando se abre una pantalla/modal y no interceptamos window.fetch.
   const modal = document.querySelector('.overlay .modal');
   if (modal) {
     cleanModalUnits(modal);
