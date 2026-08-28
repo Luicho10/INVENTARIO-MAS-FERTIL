@@ -50,7 +50,7 @@ function decorateMatterTable() {
       s.addEventListener('change', async () => {
         const next = normalize(s.value);
         const previous = normalize(s.dataset.previous || 'kg');
-        if (!confirm(`Cambiar la unidad de registro de ${code} a ${next}?\n\nEl stock físico no cambia, solamente la unidad de presentación.`)) {
+        if (!confirm(`Cambiar la unidad de registro de ${code} a ${next}?\n\nEl stock físico no cambia; solamente cambia la unidad en que se muestra y registra.`)) {
           s.value = previous;
           return;
         }
@@ -81,7 +81,6 @@ function cleanModalUnits(modal) {
   const selects = [...modal.querySelectorAll('select')];
   selects.forEach(s => {
     [...s.options].forEach(o => {
-      // La ventana Nueva materia prima ya posee sus opciones; no las eliminamos.
       if (/^ton$/i.test(o.textContent.trim())) { o.value = 'Tn'; o.textContent = 'Tn'; }
     });
   });
@@ -89,21 +88,28 @@ function cleanModalUnits(modal) {
   if (newMpUnit) selectStyle(newMpUnit);
 }
 
-function setupAdjustmentModal(modal) {
+function adjustmentElements(modal) {
   const labels = [...modal.querySelectorAll('label')];
   const materialLabel = labels.find(l => /Materia prima/i.test(l.textContent) && l.querySelector('select'));
-  if (!materialLabel) return;
+  const opSelect = [...modal.querySelectorAll('select')].find(s => [...s.options].some(o => /Establecer stock exacto/i.test(o.textContent)));
+  const qtyLabel = labels.find(l => /Nuevo stock|Cantidad/i.test(l.textContent) && l.querySelector('input[type="number"]'));
+  const reason = labels.find(l => /Justificación/i.test(l.textContent) && l.querySelector('textarea'))?.querySelector('textarea');
+  return {materialSelect:materialLabel?.querySelector('select'),opSelect,qtyInput:qtyLabel?.querySelector('input[type="number"]'),reason};
+}
+
+function setupAdjustmentModal(modal) {
+  const {materialSelect} = adjustmentElements(modal);
+  if (!materialSelect) return;
 
   let unitWrap = modal.querySelector('[data-registration-unit]');
   if (!unitWrap) {
     unitWrap = document.createElement('label');
     unitWrap.dataset.registrationUnit = '1';
     unitWrap.innerHTML = 'Unidad de registro<select><option value="kg">Kg</option><option value="Tn">Tn</option></select>';
-    materialLabel.insertAdjacentElement('afterend', unitWrap);
+    materialSelect.closest('label').insertAdjacentElement('afterend', unitWrap);
     selectStyle(unitWrap.querySelector('select'));
   }
 
-  const materialSelect = materialLabel.querySelector('select');
   const unitSelect = unitWrap.querySelector('select');
   const sync = () => {
     const option = materialSelect.selectedOptions[0];
@@ -129,11 +135,64 @@ function updateAdjustmentLabels(modal, unit) {
   if (qty) qty.childNodes[0].textContent = `${operation === 'set' ? 'Nuevo stock' : 'Cantidad'} (${unit})`;
 }
 
+async function saveAdjustmentFromUnits(modal) {
+  const {materialSelect,opSelect,qtyInput,reason} = adjustmentElements(modal);
+  const unitSelect = modal.querySelector('[data-registration-unit] select');
+  const id = Number(materialSelect?.value || 0);
+  const q = Number(qtyInput?.value || 0);
+  const op = opSelect?.value || 'set';
+  const unit = normalize(unitSelect?.value || 'kg');
+  const factorUnit = factor(unit);
+  const motivo = String(reason?.value || '').trim();
+  if (!id || q < 0 || !motivo) return {ok:false,message:'Seleccione una materia prima, cantidad y justificación.'};
+
+  const currentResult = await supabase.from('materias_primas').select('id,nombre,unidad,stock_inicial').eq('id',id).single();
+  if (currentResult.error || !currentResult.data) return {ok:false,message:currentResult.error?.message||'No se pudo leer la materia prima.'};
+  const x = currentResult.data;
+  const currentKg = Number(x.stock_inicial || 0);
+  const quantityKg = q * factorUnit;
+  const nextKg = op === 'set' ? quantityKg : op === 'add' ? currentKg + quantityKg : currentKg - quantityKg;
+  if (nextKg < 0) return {ok:false,message:'El stock no puede quedar negativo.'};
+  const diffKg = nextKg - currentKg;
+
+  const update = await supabase.from('materias_primas').update({stock_inicial:nextKg}).eq('id',id);
+  if (update.error) return {ok:false,message:update.error.message};
+  const movement = await supabase.from('movimientos_inventario').insert({tipo:'AJUSTE MANUAL MATERIA PRIMA',material_id:id,producto_id:null,cantidad_kg:diffKg,detalle:motivo});
+  if (movement.error) return {ok:false,message:movement.error.message};
+  return {ok:true};
+}
+
+function interceptAdjustmentSave() {
+  const modal = document.querySelector('.overlay .modal');
+  if (!modal || !/Carga \/ ajuste manual de materia prima/i.test(modal.querySelector('.modalhead h2')?.textContent || '')) return;
+  if (modal.dataset.adjustSaveBound === '1') return;
+  const buttons = [...modal.querySelectorAll('button')];
+  const saveButton = buttons.find(b => /^Guardar ajuste$/i.test(b.textContent.trim()));
+  if (!saveButton) return;
+  modal.dataset.adjustSaveBound = '1';
+  saveButton.addEventListener('click', async e => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (saveButton.dataset.saving === '1') return;
+    saveButton.dataset.saving = '1';
+    saveButton.disabled = true;
+    const result = await saveAdjustmentFromUnits(modal);
+    if (!result.ok) {
+      alert(result.message);
+      saveButton.disabled = false;
+      saveButton.dataset.saving = '0';
+      return;
+    }
+    location.reload();
+  }, true);
+}
+
 function improve() {
   const modal = document.querySelector('.overlay .modal');
   if (modal) {
     cleanModalUnits(modal);
     setupAdjustmentModal(modal);
+    interceptAdjustmentSave();
   }
   decorateMatterTable();
 }
