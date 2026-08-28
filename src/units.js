@@ -16,10 +16,24 @@ const selectStyle = s => {
   s.style.fontWeight = '600';
 };
 
-function parseLocaleNumber(text) {
-  const value = String(text || '').trim();
+// Acepta tanto formato es-PY (9,65 / 1.000,25) como formato JS (9.65 / 1000.25).
+function parseNumber(text) {
+  const value = String(text || '').trim().replace(/\s+/g, '').replace(/[^0-9,.-]/g, '');
   if (!value) return 0;
-  const n = Number(value.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, ''));
+  const hasComma = value.includes(',');
+  const hasDot = value.includes('.');
+  let normalized = value;
+  if (hasComma && hasDot) {
+    // El último separador se considera decimal.
+    if (value.lastIndexOf(',') > value.lastIndexOf('.')) normalized = value.replace(/\./g, '').replace(',', '.');
+    else normalized = value.replace(/,/g, '');
+  } else if (hasComma) {
+    normalized = value.replace(',', '.');
+  } else {
+    // Un único punto es decimal, no separador de miles.
+    normalized = value;
+  }
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -71,7 +85,7 @@ function decorateMatterTable() {
     const f = factor(unit);
     [4, 5].forEach(i => {
       if (!c[i]) return;
-      if (c[i].dataset.rawKg == null) c[i].dataset.rawKg = String(parseLocaleNumber(c[i].textContent));
+      if (c[i].dataset.rawKg == null) c[i].dataset.rawKg = String(parseNumber(c[i].textContent) * f);
       const kg = Number(c[i].dataset.rawKg || 0);
       c[i].textContent = fmt(kg / f);
       c[i].title = `Stock interno: ${fmt(kg)} kg`;
@@ -95,7 +109,7 @@ function decorateDashboard() {
       const match = text.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
       if (!match) return null;
       const unit = normalize(match[2] || 'kg');
-      const displayedValue = parseLocaleNumber(match[1]);
+      const displayedValue = parseNumber(match[1]);
       storedKg = displayedValue * factor(unit);
       row.dataset.storedKg = String(storedKg);
       row.dataset.unit = unit;
@@ -145,7 +159,6 @@ function adjustmentElements(modal) {
 function setupAdjustmentModal(modal) {
   const {materialSelect} = adjustmentElements(modal);
   if (!materialSelect) return;
-
   let unitWrap = modal.querySelector('[data-registration-unit]');
   if (!unitWrap) {
     unitWrap = document.createElement('label');
@@ -154,7 +167,6 @@ function setupAdjustmentModal(modal) {
     materialSelect.closest('label').insertAdjacentElement('afterend', unitWrap);
     selectStyle(unitWrap.querySelector('select'));
   }
-
   const unitSelect = unitWrap.querySelector('select');
   const sync = () => {
     const option = materialSelect.selectedOptions[0];
@@ -190,7 +202,6 @@ async function saveAdjustmentFromUnits(modal) {
   const factorUnit = factor(unit);
   const motivo = String(reason?.value || '').trim();
   if (!id || q < 0 || !motivo) return {ok:false,message:'Seleccione una materia prima, cantidad y justificación.'};
-
   const currentResult = await supabase.from('materias_primas').select('id,nombre,unidad,stock_inicial').eq('id',id).single();
   if (currentResult.error || !currentResult.data) return {ok:false,message:currentResult.error?.message||'No se pudo leer la materia prima.'};
   const x = currentResult.data;
@@ -199,7 +210,6 @@ async function saveAdjustmentFromUnits(modal) {
   const nextKg = op === 'set' ? quantityKg : op === 'add' ? currentKg + quantityKg : currentKg - quantityKg;
   if (nextKg < 0) return {ok:false,message:'El stock no puede quedar negativo.'};
   const diffKg = nextKg - currentKg;
-
   const update = await supabase.from('materias_primas').update({stock_inicial:nextKg}).eq('id',id);
   if (update.error) return {ok:false,message:update.error.message};
   const movement = await supabase.from('movimientos_inventario').insert({tipo:'AJUSTE MANUAL MATERIA PRIMA',material_id:id,producto_id:null,cantidad_kg:diffKg,detalle:motivo});
@@ -211,8 +221,7 @@ function interceptAdjustmentSave() {
   const modal = document.querySelector('.overlay .modal');
   if (!modal || !/Carga \/ ajuste manual de materia prima/i.test(modal.querySelector('.modalhead h2')?.textContent || '')) return;
   if (modal.dataset.adjustSaveBound === '1') return;
-  const buttons = [...modal.querySelectorAll('button')];
-  const saveButton = buttons.find(b => /^Guardar ajuste$/i.test(b.textContent.trim()));
+  const saveButton = [...modal.querySelectorAll('button')].find(b => /^Guardar ajuste$/i.test(b.textContent.trim()));
   if (!saveButton) return;
   modal.dataset.adjustSaveBound = '1';
   saveButton.addEventListener('click', async e => {
