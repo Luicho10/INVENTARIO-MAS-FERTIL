@@ -89,22 +89,27 @@ function decorateDashboard() {
   const data = rows.map(row => {
     const stockCell = row.cells[3];
     if (!stockCell) return null;
-    const text = stockCell.textContent.trim();
-    const match = text.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
-    if (!match) return null;
-    const unit = normalize(match[2] || 'kg');
-    const storedKg = parseLocaleNumber(match[1]);
-    return { storedKg, unit };
+    let storedKg = Number(row.dataset.storedKg);
+    if (!Number.isFinite(storedKg)) {
+      const text = stockCell.textContent.trim();
+      const match = text.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
+      if (!match) return null;
+      const unit = normalize(match[2] || 'kg');
+      const displayedValue = parseLocaleNumber(match[1]);
+      storedKg = displayedValue * factor(unit);
+      row.dataset.storedKg = String(storedKg);
+      row.dataset.unit = unit;
+    }
+    const unit = normalize(row.dataset.unit || stockCell.textContent.match(/(kg|Tn|ton)$/i)?.[1] || 'kg');
+    return { row, stockCell, storedKg, unit };
   }).filter(Boolean);
   if (!data.length) return;
 
-  const units = [...new Set(data.map(x => x.unit))];
-  data.forEach((x, i) => {
-    const row = rows[i];
-    const cell = row?.cells[3];
-    if (cell) cell.textContent = fmt(x.storedKg / factor(x.unit)) + ' ' + x.unit;
+  data.forEach(x => {
+    x.stockCell.textContent = fmt(x.storedKg / factor(x.unit)) + ' ' + x.unit;
   });
 
+  const units = [...new Set(data.map(x => x.unit))];
   if (units.length === 1) {
     const unit = units[0];
     const total = data.reduce((sum, x) => sum + x.storedKg / factor(unit), 0);
