@@ -30,6 +30,23 @@ function getAdjustmentOperation() {
   return op?.value || 'set';
 }
 
+function getEnteredAdjustmentQuantity() {
+  const modal = document.querySelector('.overlay .modal');
+  if (!modal) return null;
+  const labels = [...modal.querySelectorAll('label')];
+  const qtyLabel = labels.find(l => /Nuevo stock|Cantidad/i.test(l.textContent));
+  const input = qtyLabel?.querySelector('input');
+  return input ? Number(input.value || 0) : null;
+}
+
+function getCurrentInternalStock(code) {
+  const main = document.querySelector('main');
+  const table = main?.querySelector('.panel table');
+  const row = [...(table?.tBodies[0]?.rows || [])].find(r => r.cells[0]?.textContent.trim() === code);
+  const raw = parseFloat(row?.cells[4]?.dataset.raw || '');
+  return Number.isFinite(raw) ? raw : null;
+}
+
 function parseBody(init) {
   try {
     if (!init?.body) return null;
@@ -51,8 +68,8 @@ window.fetch = async (input, init = {}) => {
 
     if (method === 'POST' && body.unidad) {
       const unit = normalize(body.unidad);
-      body.unidad = unit;
       const f = factor(unit);
+      body.unidad = unit;
       if (f !== 1) {
         if (body.stock_inicial != null) body.stock_inicial = Number(body.stock_inicial || 0) * f;
         if (body.stock_minimo != null) body.stock_minimo = Number(body.stock_minimo || 0) * f;
@@ -66,14 +83,23 @@ window.fetch = async (input, init = {}) => {
       const code = codeMatch ? decodeURIComponent(codeMatch[1]) : '';
       const unit = getAdjustmentUnit() || (code ? getUnitFromTable(code) : 'kg');
       const f = factor(unit);
-      const entered = Number(body.stock_inicial || 0);
-      if (f !== 1) body.stock_inicial = entered * f;
+      const operation = getAdjustmentOperation();
+      const entered = getEnteredAdjustmentQuantity();
+      const currentKg = code ? getCurrentInternalStock(code) : null;
+      const q = Number.isFinite(entered) ? entered : Number(body.stock_inicial || 0);
+      const cur = Number.isFinite(currentKg) ? currentKg : 0;
+
+      if (operation === 'set') body.stock_inicial = q * f;
+      else if (operation === 'add') body.stock_inicial = cur + q * f;
+      else if (operation === 'sub') body.stock_inicial = cur - q * f;
+
       pendingAdjustment = {
         unit,
         factor: f,
-        entered,
-        operation: getAdjustmentOperation(),
-        id: idMatch ? idMatch[1] : null
+        entered: q,
+        operation,
+        id: idMatch ? idMatch[1] : null,
+        code
       };
       init = { ...init, body: JSON.stringify(body) };
     }
@@ -81,11 +107,9 @@ window.fetch = async (input, init = {}) => {
 
   if (body && /\/rest\/v1\/movimientos_inventario(?:\?|$)/.test(url) && pendingAdjustment && /AJUSTE MANUAL MATERIA PRIMA/i.test(body.tipo || '')) {
     const p = pendingAdjustment;
-    const rawDiff = Number(body.cantidad_kg || 0);
-    const diffKg = p.operation === 'set'
-      ? rawDiff + p.entered * (p.factor - 1)
-      : rawDiff * p.factor;
-    body.cantidad_kg = diffKg;
+    body.cantidad_kg = p.operation === 'set'
+      ? Number(body.cantidad_kg || 0)
+      : Number(body.cantidad_kg || 0) * p.factor;
     pendingAdjustment = null;
     init = { ...init, body: JSON.stringify(body) };
   }
@@ -126,7 +150,6 @@ function addRegistrationUnitToAdjustment(modal) {
 }
 
 function refreshAdjustmentTexts(modal, unit) {
-  const f = factor(unit);
   const labels = [...modal.querySelectorAll('label')];
   const qtyLabel = labels.find(l => /Nuevo stock|Cantidad/i.test(l.textContent));
   if (qtyLabel) {
@@ -136,12 +159,18 @@ function refreshAdjustmentTexts(modal, unit) {
   }
   const current = modal.querySelector('.current');
   if (current) {
-    const m = current.textContent.match(/([\d.,-]+)\s*kg/i);
-    if (m) {
-      const raw = Number(m[1].replace(/\./g, '').replace(',', '.'));
-      current.innerHTML = `Stock actual: <strong>${fmt(raw / f)} ${unit}</strong>`;
-    }
+    const raw = getCurrentInternalStockFromModal(modal);
+    if (raw !== null) current.innerHTML = `Stock actual: <strong>${fmt(raw / factor(unit))} ${unit}</strong>`;
   }
+}
+
+function getCurrentInternalStockFromModal(modal) {
+  const text = modal.querySelector('.current')?.textContent || '';
+  const m = text.match(/([\d.,-]+)\s*kg/i);
+  if (!m) return null;
+  const n = Number(m[1].replace(/\./g, '').replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  return n * factor(getAdjustmentUnit());
 }
 
 function improve() {
@@ -185,9 +214,7 @@ function improve() {
   }
 
   const modal = document.querySelector('.overlay .modal');
-  if (modal) {
-    addRegistrationUnitToAdjustment(modal);
-  }
+  if (modal) addRegistrationUnitToAdjustment(modal);
 }
 
 const obs = new MutationObserver(improve);
