@@ -16,8 +16,10 @@ const selectStyle = s => {
   s.style.fontWeight = '600';
 };
 
-function rawNumber(text) {
-  const n = Number(String(text || '').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, ''));
+function parseLocaleNumber(text) {
+  const value = String(text || '').trim();
+  if (!value) return 0;
+  const n = Number(value.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -69,7 +71,7 @@ function decorateMatterTable() {
     const f = factor(unit);
     [4, 5].forEach(i => {
       if (!c[i]) return;
-      if (c[i].dataset.rawKg == null) c[i].dataset.rawKg = String(rawNumber(c[i].textContent));
+      if (c[i].dataset.rawKg == null) c[i].dataset.rawKg = String(parseLocaleNumber(c[i].textContent));
       const kg = Number(c[i].dataset.rawKg || 0);
       c[i].textContent = fmt(kg / f);
       c[i].title = `Stock interno: ${fmt(kg)} kg`;
@@ -85,23 +87,31 @@ function decorateDashboard() {
   if (!card || !rows.length) return;
 
   const data = rows.map(row => {
-    const stockText = row.cells[3]?.textContent?.trim() || '';
-    const match = stockText.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
+    const stockCell = row.cells[3];
+    if (!stockCell) return null;
+    const text = stockCell.textContent.trim();
+    const match = text.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
     if (!match) return null;
-    const value = rawNumber(match[1]);
     const unit = normalize(match[2] || 'kg');
-    return { value, unit };
+    const storedKg = parseLocaleNumber(match[1]);
+    return { storedKg, unit };
   }).filter(Boolean);
   if (!data.length) return;
 
   const units = [...new Set(data.map(x => x.unit))];
+  data.forEach((x, i) => {
+    const row = rows[i];
+    const cell = row?.cells[3];
+    if (cell) cell.textContent = fmt(x.storedKg / factor(x.unit)) + ' ' + x.unit;
+  });
+
   if (units.length === 1) {
     const unit = units[0];
-    const total = data.reduce((sum, x) => sum + x.value, 0);
+    const total = data.reduce((sum, x) => sum + x.storedKg / factor(unit), 0);
     card.textContent = `${fmt(total)} ${unit}`;
     card.title = 'Total de materias primas en la unidad seleccionada';
   } else {
-    const totalKg = data.reduce((sum, x) => sum + x.value * factor(x.unit), 0);
+    const totalKg = data.reduce((sum, x) => sum + x.storedKg, 0);
     card.textContent = `${fmt(totalKg)} kg`;
     card.title = 'Total físico de materias primas; se muestra en kg porque existen unidades mixtas';
   }
