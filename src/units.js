@@ -77,6 +77,36 @@ function decorateMatterTable() {
   });
 }
 
+function decorateDashboard() {
+  const main = document.querySelector('main');
+  if (!main || main.querySelector('h1')?.textContent?.trim() !== 'Dashboard') return;
+  const card = main.querySelector('.cards .card strong');
+  const rows = [...(main.querySelector('.panel table tbody')?.rows || [])];
+  if (!card || !rows.length) return;
+
+  const data = rows.map(row => {
+    const stockText = row.cells[3]?.textContent?.trim() || '';
+    const match = stockText.match(/^([\d.,-]+)\s*(kg|Tn|ton)?$/i);
+    if (!match) return null;
+    const value = rawNumber(match[1]);
+    const unit = normalize(match[2] || 'kg');
+    return { value, unit };
+  }).filter(Boolean);
+  if (!data.length) return;
+
+  const units = [...new Set(data.map(x => x.unit))];
+  if (units.length === 1) {
+    const unit = units[0];
+    const total = data.reduce((sum, x) => sum + x.value, 0);
+    card.textContent = `${fmt(total)} ${unit}`;
+    card.title = 'Total de materias primas en la unidad seleccionada';
+  } else {
+    const totalKg = data.reduce((sum, x) => sum + x.value * factor(x.unit), 0);
+    card.textContent = `${fmt(totalKg)} kg`;
+    card.title = 'Total físico de materias primas; se muestra en kg porque existen unidades mixtas';
+  }
+}
+
 function cleanModalUnits(modal) {
   const selects = [...modal.querySelectorAll('select')];
   selects.forEach(s => {
@@ -195,6 +225,7 @@ function improve() {
     interceptAdjustmentSave();
   }
   decorateMatterTable();
+  decorateDashboard();
 }
 
 let scheduled = false;
